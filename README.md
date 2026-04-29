@@ -1,8 +1,8 @@
 # marco-agent
 
-A simple, extensible AI agent built on [marco-harness](https://github.com/pyrotank41/MARCO).
+A simple, extensible AI agent built on [marco-harness](https://github.com/pyrotank41/MARCO). Works in CLI, server-side Node, and Next.js / Edge runtimes (anywhere `@anthropic-ai/sdk` runs).
 
-`MarcoAgent` is a thin wrapper around the harness with sensible defaults — a system prompt, the Claude Sonnet 4.6 model, and one bundled tool (`current_time`). Use it as-is for quick scripts, or extend it with your own tools and hooks for project-specific agents.
+`MarcoAgent` is a thin wrapper around the harness with sensible defaults — a system prompt, the Claude Sonnet 4.6 model, and one bundled tool (`current_time`). Use it as-is for quick scripts, or extend it with your own tools, hooks, and conversation history for project-specific agents.
 
 ## Install
 
@@ -16,8 +16,8 @@ npm install marco-agent
 import { MarcoAgent } from 'marco-agent'
 
 const agent = new MarcoAgent()
-const reply = await agent.ask('What time is it in Tokyo?')
-console.log(reply)
+const { text } = await agent.ask('What time is it in Tokyo?')
+console.log(text)
 ```
 
 Set `ANTHROPIC_API_KEY` in your environment before running.
@@ -26,7 +26,42 @@ Set `ANTHROPIC_API_KEY` in your environment before running.
 
 ```bash
 npx marco-agent "summarize the latest TC39 stage-4 proposals"
+npx marco-agent --stream "write a haiku about TypeScript"
 ```
+
+## Streaming
+
+For chat UIs, server-sent events, etc. — get tokens as they arrive:
+
+```typescript
+for await (const event of agent.stream('explain monads')) {
+  if (event.type === 'text') process.stdout.write(event.text)
+  else if (event.type === 'tool_call_start') console.log(`\n[calling ${event.name}]`)
+  else if (event.type === 'done') {
+    // event.result.messages is the canonical history — persist it for the next turn
+  }
+}
+```
+
+## Multi-turn conversations
+
+`ask()` and `stream()` both accept a `history` parameter — pass the previous turn's `result.messages` to continue:
+
+```typescript
+let history: Message[] = []
+
+const r1 = await agent.ask('My name is Karan.', history)
+history = r1.messages
+
+const r2 = await agent.ask('What did I just tell you?', history)
+console.log(r2.text) // → "You told me your name is Karan."
+```
+
+State lives with the caller, not the agent — so the same `MarcoAgent` instance is safe to share across concurrent web requests.
+
+## Web app integration (Next.js)
+
+A complete streaming chat panel example lives in [`examples/nextjs/`](examples/nextjs/) — server route handler + client React component, plus notes on adapting it for project-specific tools.
 
 ## Extending
 
@@ -57,8 +92,6 @@ const agent = new MarcoAgent({
   tools: [calculatorTool],
 })
 ```
-
-For full control over the underlying harness (registering tools dynamically, running with custom triggers), reach into `agent.raw`.
 
 ## License
 
