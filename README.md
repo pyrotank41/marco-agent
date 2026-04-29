@@ -4,6 +4,8 @@ A simple, extensible AI agent built on [marco-harness](https://github.com/pyrota
 
 `MarcoAgent` is a thin wrapper around the harness with sensible defaults — a system prompt, the Claude Sonnet 4.6 model, and one bundled tool (`current_time`). Use it as-is for quick scripts, or extend it with your own tools, hooks, and conversation history for project-specific agents.
 
+> **Designing an integration?** See [`docs/architecture.md`](docs/architecture.md) for the library/app boundary, tool-category framework, and roadmap. [`docs/usage-tracking.md`](docs/usage-tracking.md) covers token + cost accounting in depth.
+
 ## Install
 
 ```bash
