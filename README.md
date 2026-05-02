@@ -4,7 +4,7 @@ A simple, extensible AI agent built on [marco-harness](https://github.com/pyrota
 
 `MarcoAgent` is a thin, composable wrapper around the harness. Sensible defaults out of the box, every knob exposed when you need it: streaming, multi-turn history, usage + cost tracking, per-turn budget guards, MCP-server-to-Tool bridge, opt-in compaction, and reasoning-content surfacing for chain-of-thought models.
 
-> **Designing an integration?** See [`docs/architecture.md`](docs/architecture.md) for the library/app boundary, tool-source framework, and the design decisions worth knowing. Per-feature deep dives: [`docs/usage-tracking.md`](docs/usage-tracking.md), [`docs/mcp-bridge.md`](docs/mcp-bridge.md), [`docs/compaction.md`](docs/compaction.md).
+> **Designing an integration?** See [`docs/architecture.md`](docs/architecture.md) for the library/app boundary, tool-source framework, and the design decisions worth knowing. Per-feature deep dives: [`docs/providers.md`](docs/providers.md), [`docs/usage-tracking.md`](docs/usage-tracking.md), [`docs/mcp-bridge.md`](docs/mcp-bridge.md), [`docs/compaction.md`](docs/compaction.md).
 
 ## Install
 
@@ -76,25 +76,34 @@ State lives with the caller, not the agent — so a single `MarcoAgent` instance
 
 ## Choosing a provider
 
-Default uses `AnthropicProvider` (Claude). For everything else, swap in `OpenAICompatibleProvider`:
+Two providers cover everything. `AnthropicProvider` for Claude. `OpenAICompatibleProvider` for the rest — swap one URL, talk to anything that speaks `/v1/chat/completions`:
+
+| Backend | Provider | `baseURL` |
+|---|---|---|
+| Claude (Anthropic) | `AnthropicProvider` | — |
+| OpenAI direct | `OpenAICompatibleProvider` | `https://api.openai.com/v1` (default) |
+| OpenRouter | `OpenAICompatibleProvider` | `https://openrouter.ai/api/v1` |
+| DeepSeek direct | `OpenAICompatibleProvider` | `https://api.deepseek.com/v1` |
+| Ollama (local Llama, Qwen, etc.) | `OpenAICompatibleProvider` | `http://localhost:11434/v1` |
+| LM Studio (local) | `OpenAICompatibleProvider` | `http://localhost:1234/v1` |
+| Groq, Together, Fireworks, vLLM, … | `OpenAICompatibleProvider` | their `/v1` |
+
+Quick example — OpenRouter:
 
 ```typescript
 import { MarcoAgent, OpenAICompatibleProvider } from 'marco-agent'
 
-// OpenRouter — gateway to DeepSeek, Llama, Qwen, GPT, Mistral, etc.
-const provider = new OpenAICompatibleProvider({
-  apiKey: process.env.OPENROUTER_API_KEY,
-  baseURL: 'https://openrouter.ai/api/v1',
-  headers: { 'HTTP-Referer': 'https://yourapp.com', 'X-Title': 'Your App' },
-})
-
 const agent = new MarcoAgent({
-  provider,
-  model: 'deepseek/deepseek-v4-flash',  // any model OpenRouter exposes
+  provider: new OpenAICompatibleProvider({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: 'https://openrouter.ai/api/v1',
+    headers: { 'HTTP-Referer': 'https://yourapp.com', 'X-Title': 'Your App' },
+  }),
+  model: 'deepseek/deepseek-v4-flash',
 })
 ```
 
-Same `OpenAICompatibleProvider` works against Together (`baseURL: 'https://api.together.xyz/v1'`), Groq, vLLM, LM Studio, OpenAI itself, or any endpoint that ships `/v1/chat/completions`.
+Full recipes for each backend (including local Ollama, direct OpenAI, vLLM, etc.) are in [`docs/providers.md`](docs/providers.md).
 
 ## Tools — define once with zod
 

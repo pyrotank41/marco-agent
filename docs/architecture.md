@@ -113,7 +113,7 @@ Tokens are the source of truth (model-agnostic, never wrong). Cost is a derived 
 
 Budget guards enforce per-turn limits in tokens, model calls, or USD — caller picks. Trips abort the run via the harness's `beforeModelCall` hook and surface as a typed error (`ask`) or a `budget_exceeded` event (`stream`).
 
-Full details: [`docs/usage-tracking.md`](usage-tracking.md).
+Full details: [`docs/usage-tracking.md`](usage-tracking.md). For the complete list of supported model backends and `baseURL` recipes (Anthropic, OpenAI direct, OpenRouter, DeepSeek, Ollama, LM Studio, vLLM, Groq, Together, Fireworks), see [`docs/providers.md`](providers.md).
 
 ## Hooks
 
