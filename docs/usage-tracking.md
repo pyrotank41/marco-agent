@@ -52,21 +52,86 @@ The default pricing function knows current Anthropic models:
 
 These are a **snapshot** baked into the library. They will drift. If accuracy matters, supply your own pricing function:
 
+The library strips dated model suffixes (`claude-haiku-4-5-20251001` → `claude-haiku-4-5`) so the default table works with both naming conventions.
+
+## Writing your own pricing function
+
+The `PricingFunction` signature is:
+
+```typescript
+type PricingFunction = (model: string, usage: Usage) => number   // returns dollars
+```
+
+`model` is the string you passed as `model` to `MarcoAgent` (e.g. `'deepseek/deepseek-v4-flash'`). `usage` is the marco-agent `Usage` shape (`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheCreationTokens`, `modelCalls`).
+
+Your function returns the dollar cost for that one call. The library calls it after every model call and accumulates.
+
+### Minimal example — one OpenRouter model
+
 ```typescript
 import { MarcoAgent, type PricingFunction } from 'marco-agent'
 
-const myPricing: PricingFunction = (model, usage) => {
-  // your own table, your negotiated rates, your cache weighting...
-  if (model === 'claude-sonnet-4-6') {
-    return (usage.inputTokens * 2.50 + usage.outputTokens * 12.00) / 1_000_000
+const pricing: PricingFunction = (model, usage) => {
+  if (model === 'deepseek/deepseek-v4-flash') {
+    // OpenRouter pricing as of writing (check https://openrouter.ai/models for current rates)
+    return (usage.inputTokens * 0.14 + usage.outputTokens * 0.28) / 1_000_000
   }
   return 0
 }
 
-const agent = new MarcoAgent({ pricing: myPricing })
+const agent = new MarcoAgent({ pricing })
 ```
 
-The library also strips dated suffixes (`claude-haiku-4-5-20251001` → `claude-haiku-4-5`) so the default table works with both naming conventions.
+### Realistic example — multi-provider with Anthropic defaults preserved
+
+For apps using both Anthropic models AND non-Anthropic models, compose with the built-in `defaultAnthropicPricing` so you don't re-author its table:
+
+```typescript
+import { MarcoAgent, defaultAnthropicPricing, type PricingFunction } from 'marco-agent'
+
+// Per-1M-token rates. Snapshot — verify against your provider's pricing page.
+const OPENROUTER_RATES: Record<string, { input: number; output: number }> = {
+  'deepseek/deepseek-v4-flash': { input: 0.14, output: 0.28 },
+  'deepseek/deepseek-v4-pro':   { input: 1.25, output: 5.00 },
+  'openai/gpt-4.1-mini':        { input: 0.40, output: 1.60 },
+  'meta-llama/llama-3.3-70b-instruct': { input: 0.20, output: 0.20 },
+}
+
+const pricing: PricingFunction = (model, usage) => {
+  // Delegate Claude models to the built-in table.
+  if (model.startsWith('claude-')) {
+    return defaultAnthropicPricing(model, usage)
+  }
+  // OpenRouter / direct providers: look up our table.
+  const rates = OPENROUTER_RATES[model]
+  if (!rates) return 0  // unknown model — return 0 rather than throw, telemetry not blocking
+  return (usage.inputTokens * rates.input + usage.outputTokens * rates.output) / 1_000_000
+}
+
+const agent = new MarcoAgent({
+  pricing,
+  budget: { maxCostUsdPerTurn: 0.10, onExceeded: 'abort' },  // budget is enforced against pricing's output
+})
+```
+
+Returning `0` for unknown models is deliberate: you'd rather have a cost-tracking gap (silent zero in telemetry) than a thrown error mid-conversation. Log the missing entry from your own monitoring instead.
+
+### Where to find rates
+
+| Provider | Pricing page |
+|---|---|
+| Anthropic | https://www.anthropic.com/pricing |
+| OpenAI | https://platform.openai.com/docs/pricing |
+| OpenRouter | https://openrouter.ai/models (per-model page) |
+| DeepSeek | https://api-docs.deepseek.com/quick_start/pricing |
+| Together | https://www.together.ai/pricing |
+| Groq | https://groq.com/pricing |
+
+These change. Build a habit of refreshing the table when you add a new model to your registry. For long-lived apps, consider pulling rates from your provider's pricing API (OpenRouter exposes one) and caching client-side rather than baking them in.
+
+### Where the cost lands
+
+Once `pricing` is set, every `result.usage.costUsd` is computed from it. Same for stream `usage` events. The budget guard's `maxCostUsdPerTurn` checks against this same number, so consistent pricing means consistent enforcement.
 
 ## Budget guards
 

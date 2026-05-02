@@ -161,7 +161,7 @@ const agent = new MarcoAgent({
 
 ### Pricing defaults are Anthropic-only
 
-`defaultAnthropicPricing` (used for `result.usage.costUsd` when you don't pass your own) only knows Sonnet / Haiku / Opus rates. For OpenRouter / OpenAI / DeepSeek / local models, supply a `pricing` function or treat `costUsd` as zero. See [`docs/usage-tracking.md`](usage-tracking.md).
+`defaultAnthropicPricing` (used for `result.usage.costUsd` when you don't pass your own) only knows Sonnet / Haiku / Opus rates. For OpenRouter / OpenAI / DeepSeek / local models, supply a `pricing` function or treat `costUsd` as zero. The "Writing your own pricing function" section of [`docs/usage-tracking.md`](usage-tracking.md#writing-your-own-pricing-function) walks through a multi-provider example that composes with `defaultAnthropicPricing` so you don't re-author Anthropic's rates.
 
 ### Reasoning model token budgets
 
