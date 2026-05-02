@@ -1,5 +1,7 @@
 export { MarcoAgent, BudgetExceededError, type MarcoAgentOptions, type AskResult, type StreamEvent, type BudgetConfig } from './agent.js'
+export { type CompactionConfig, type CompactionResult, shouldCompact, performCompaction } from './compaction.js'
 export { currentTimeTool } from './tools/current-time.js'
+export { toolFromZod, z, type ToolFromZodOptions } from './tool-from-zod.js'
 export { defaultAnthropicPricing, emptyUsage, addUsage, withCost, type Usage, type CostUsage, type PricingFunction } from './usage.js'
 export { fromMcpServer, type FromMcpServerOptions } from './mcp.js'
 export { AnthropicProvider, OpenAICompatibleProvider, MockProvider } from 'marco-harness'

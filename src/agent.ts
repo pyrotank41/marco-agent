@@ -1,6 +1,7 @@
 import { Harness, AnthropicProvider, type Tool, type Hooks, type ModelProvider, type ModelConfig, type Message, type ChunkEvent, type AssistantMessage } from 'marco-harness'
 import { currentTimeTool } from './tools/current-time.js'
 import { type Usage, type CostUsage, type PricingFunction, emptyUsage, addUsage, fromHarnessUsage, turnUsage, withCost } from './usage.js'
+import { type CompactionConfig, shouldCompact, performCompaction } from './compaction.js'
 
 export type BudgetConfig = {
   maxInputTokensPerTurn?: number
@@ -23,6 +24,9 @@ export type MarcoAgentOptions = {
   maxIterations?: number
   pricing?: PricingFunction
   budget?: BudgetConfig
+  // Optional. Without it, no compaction happens. summaryModel and
+  // summaryPrompt are required when compaction is configured.
+  compaction?: CompactionConfig
 }
 
 export type AskResult = {
@@ -33,6 +37,8 @@ export type AskResult = {
   reasoning?: string
   messages: Message[]
   usage: CostUsage
+  // True when history was compacted before this turn. Absent otherwise.
+  compacted?: boolean
 }
 
 export type StreamEvent =
@@ -42,6 +48,8 @@ export type StreamEvent =
   | { type: 'tool_call_end'; id: string }
   | { type: 'usage'; usage: CostUsage }
   | { type: 'budget_exceeded'; reason: string; usage: CostUsage }
+  | { type: 'compaction_start' }
+  | { type: 'compaction_end'; messagesRemoved: number; summaryTokens: number; summaryText: string }
   | { type: 'done'; result: AskResult }
 
 const DEFAULT_SYSTEM_PROMPT = `You are a helpful AI assistant built on the marco-harness framework.
@@ -66,18 +74,46 @@ export class MarcoAgent {
   }
 
   async ask(prompt: string, history: Message[] = []): Promise<AskResult> {
-    const harness = this.buildHarness(history, this.provider, () => undefined)
+    let workingHistory = history
+    let compacted = false
+    let compactionUsage = emptyUsage()
+
+    if (shouldCompact(history, prompt, this.options.compaction)) {
+      const c = await performCompaction(this.provider, history, this.options.compaction!)
+      workingHistory = c.history
+      compacted = c.compacted
+      compactionUsage = { ...emptyUsage(), inputTokens: c.usage.inputTokens, outputTokens: c.usage.outputTokens, modelCalls: 1 }
+    }
+
+    const harness = this.buildHarness(workingHistory, this.provider, () => undefined)
     const result = await harness.run({ kind: 'user_message', text: prompt })
-    const usage = withCost(turnUsage(result.messages, history.length), this.model(), this.options.pricing)
+    const turnTokens = turnUsage(result.messages, workingHistory.length)
+    const totalTokens = addUsage(compactionUsage, turnTokens)
+    const usage = withCost(totalTokens, this.model(), this.options.pricing)
     this.assertWithinBudget(usage)
-    return buildAskResult(result.messages, history.length, usage)
+
+    const out = buildAskResult(result.messages, workingHistory.length, usage)
+    return compacted ? { ...out, compacted: true } : out
   }
 
   async *stream(prompt: string, history: Message[] = []): AsyncGenerator<StreamEvent, void, unknown> {
+    let workingHistory = history
+    let compacted = false
+    let compactionUsage = emptyUsage()
+
+    if (shouldCompact(history, prompt, this.options.compaction)) {
+      yield { type: 'compaction_start' }
+      const c = await performCompaction(this.provider, history, this.options.compaction!)
+      workingHistory = c.history
+      compacted = c.compacted
+      compactionUsage = { ...emptyUsage(), inputTokens: c.usage.inputTokens, outputTokens: c.usage.outputTokens, modelCalls: 1 }
+      yield { type: 'compaction_end', messagesRemoved: c.messagesRemoved, summaryTokens: c.usage.outputTokens, summaryText: c.summaryText }
+    }
+
     const queue: ChunkEvent[] = []
     let resolveWait: (() => void) | null = null
     let done = false
-    let runningUsage = emptyUsage()
+    let runningUsage = compactionUsage
     let budgetTrip: { reason: string; usage: CostUsage } | null = null
 
     const wake = (): void => {
@@ -97,7 +133,7 @@ export class MarcoAgent {
       },
     }
 
-    const harness = this.buildHarness(history, tee, () => budgetTrip?.reason)
+    const harness = this.buildHarness(workingHistory, tee, () => budgetTrip?.reason)
     const runPromise = harness
       .run({ kind: 'user_message', text: prompt })
       .finally(() => { done = true; wake() })
@@ -125,8 +161,11 @@ export class MarcoAgent {
     }
 
     const result = await runPromise
-    const finalUsage = withCost(turnUsage(result.messages, history.length), this.model(), this.options.pricing)
-    yield { type: 'done', result: buildAskResult(result.messages, history.length, finalUsage) }
+    const turnTokens = turnUsage(result.messages, workingHistory.length)
+    const totalTokens = addUsage(compactionUsage, turnTokens)
+    const finalUsage = withCost(totalTokens, this.model(), this.options.pricing)
+    const out = buildAskResult(result.messages, workingHistory.length, finalUsage)
+    yield { type: 'done', result: compacted ? { ...out, compacted: true } : out }
   }
 
   private model(): string {

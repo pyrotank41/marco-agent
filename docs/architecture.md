@@ -147,6 +147,8 @@ The complete library surface. If it's not in this list, it's not in v0.1.0:
 | Anthropic and Mock providers (re-exported from marco-harness) | ✅ |
 | `OpenAICompatibleProvider` for OpenRouter/Together/Groq/vLLM/etc. (re-exported) | ✅ |
 | Reasoning content surfaced as `reasoning` stream event + `AskResult.reasoning` | ✅ |
+| `toolFromZod()` — derive a Tool's JSON Schema + validation from a single zod schema | ✅ |
+| Compaction (opt-in) — summarize older history when token use trips a threshold; emits `compaction_start`/`compaction_end` events; `AskResult.compacted` flag | ✅ |
 | `marco-agent "<prompt>"` CLI bin (one-shot or `--stream`) | ✅ |
 
 Anything else — compaction, progressive tool disclosure, web search adapters, persistence helpers, plugin systems — is **not decided**. We add features when a real consumer needs them, not before.
@@ -170,3 +172,9 @@ MCP is the standard tool-exposition protocol across the LLM ecosystem. Building 
 
 ### No abstractions before two concrete consumers
 We deliberately did NOT ship a `MemoryStore` interface or a `HistoryStore` interface, even though both seemed reasonable. Reason: each had exactly one current consumer, and one impl is a class, not an interface. We add the interface when a second backend actually shows up.
+
+### SDK for Anthropic, raw fetch for OpenAI-compatible — situational, not biased
+`AnthropicProvider` uses `@anthropic-ai/sdk` because Anthropic's streaming protocol is genuinely complex (six event types, nested content blocks, prompt caching, extended thinking, computer use — and it changes). The SDK absorbs that churn. `OpenAICompatibleProvider` uses raw `fetch()` because the OpenAI chat-completions format is simple, the role demands working with many endpoints (OpenRouter / Together / Groq / vLLM / LM Studio), and pulling the OpenAI SDK with custom `baseURL` adds 15+ deps we don't need. Rule: **use the SDK when the protocol earns its weight; roll fetch when it doesn't.** Asymmetry is intentional, not accidental.
+
+### Compaction defaults are intentionally minimal
+Compaction takes `summaryModel` and `summaryPrompt` as **required** fields with no defaults. Defaulting `summaryModel` would silently break apps using non-Anthropic providers (the default model wouldn't resolve against an OpenRouter or DeepSeek API key). Defaulting `summaryPrompt` would produce useless summaries — what to preserve depends on the agent's domain. Only `triggerAtInputTokens` (default 150_000) and `keepLastTurns` (default 4) have defaults, because both are domain-agnostic and broadly safe.
