@@ -2,4 +2,5 @@ export { MarcoAgent, BudgetExceededError, type MarcoAgentOptions, type AskResult
 export { currentTimeTool } from './tools/current-time.js'
 export { defaultAnthropicPricing, emptyUsage, addUsage, withCost, type Usage, type CostUsage, type PricingFunction } from './usage.js'
 export { fromMcpServer, type FromMcpServerOptions } from './mcp.js'
-export type { Tool, Hooks, ModelProvider, ModelConfig, Message } from 'marco-harness'
+export { AnthropicProvider, OpenAICompatibleProvider, MockProvider } from 'marco-harness'
+export type { Tool, Hooks, ModelProvider, ModelConfig, Message, AnthropicProviderOptions, OpenAICompatibleProviderOptions } from 'marco-harness'

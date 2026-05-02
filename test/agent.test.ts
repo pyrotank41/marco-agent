@@ -48,6 +48,68 @@ describe('MarcoAgent', () => {
     expect(result.messages[0]).toEqual(history[0])
   })
 
+  it('ask() surfaces reasoning when the model emits it', async () => {
+    const provider = new MockProvider([
+      [
+        { type: 'reasoning_delta' as const, text: 'thinking step one. ' },
+        { type: 'reasoning_delta' as const, text: 'step two. ' },
+        { type: 'text_delta' as const, text: 'final answer' },
+        {
+          type: 'message_end' as const,
+          message: {
+            role: 'assistant' as const,
+            text: 'final answer',
+            reasoning: 'thinking step one. step two. ',
+            toolCalls: [],
+            stopReason: 'end_turn' as const,
+            usage: { inputTokens: 0, outputTokens: 0 },
+          },
+        },
+      ],
+    ])
+    const agent = new MarcoAgent({ provider, tools: [] })
+    const result = await agent.ask('hi')
+    expect(result.reasoning).toBe('thinking step one. step two. ')
+    expect(result.text).toBe('final answer')
+  })
+
+  it('ask() omits reasoning field when no reasoning was emitted', async () => {
+    const provider = new MockProvider([singleAssistantTurn('plain answer')])
+    const agent = new MarcoAgent({ provider, tools: [] })
+    const result = await agent.ask('hi')
+    expect(result.reasoning).toBeUndefined()
+  })
+
+  it('stream() forwards reasoning_delta as reasoning event', async () => {
+    const provider = new MockProvider([
+      [
+        { type: 'reasoning_delta' as const, text: 'pondering...' },
+        { type: 'text_delta' as const, text: 'answer' },
+        {
+          type: 'message_end' as const,
+          message: {
+            role: 'assistant' as const,
+            text: 'answer',
+            reasoning: 'pondering...',
+            toolCalls: [],
+            stopReason: 'end_turn' as const,
+            usage: { inputTokens: 0, outputTokens: 0 },
+          },
+        },
+      ],
+    ])
+    const agent = new MarcoAgent({ provider, tools: [] })
+    const events: StreamEvent[] = []
+    for await (const ev of agent.stream('hi')) events.push(ev)
+
+    const reasoningTexts = events.filter((e) => e.type === 'reasoning').map((e) => (e as { text: string }).text)
+    expect(reasoningTexts.join('')).toBe('pondering...')
+
+    const done = events.find((e) => e.type === 'done')!
+    if (done.type !== 'done') throw new Error('expected done')
+    expect(done.result.reasoning).toBe('pondering...')
+  })
+
   it('stream() yields text events and a final done event', async () => {
     const provider = new MockProvider([singleAssistantTurn('Streamed.')])
     const agent = new MarcoAgent({ provider, tools: [] })

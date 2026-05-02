@@ -27,12 +27,17 @@ export type MarcoAgentOptions = {
 
 export type AskResult = {
   text: string
+  // Chain-of-thought, when the underlying model emitted reasoning tokens
+  // (DeepSeek R1/V4-Pro, OpenAI o-series, etc.). Concatenation of all
+  // assistant turns' reasoning content for this ask.
+  reasoning?: string
   messages: Message[]
   usage: CostUsage
 }
 
 export type StreamEvent =
   | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string }
   | { type: 'tool_call_start'; id: string; name: string }
   | { type: 'tool_call_end'; id: string }
   | { type: 'usage'; usage: CostUsage }
@@ -65,7 +70,7 @@ export class MarcoAgent {
     const result = await harness.run({ kind: 'user_message', text: prompt })
     const usage = withCost(turnUsage(result.messages, history.length), this.model(), this.options.pricing)
     this.assertWithinBudget(usage)
-    return { text: extractFinalText(result.messages), messages: result.messages, usage }
+    return buildAskResult(result.messages, history.length, usage)
   }
 
   async *stream(prompt: string, history: Message[] = []): AsyncGenerator<StreamEvent, void, unknown> {
@@ -101,6 +106,7 @@ export class MarcoAgent {
       while (queue.length > 0) {
         const ev = queue.shift()!
         if (ev.type === 'text_delta') yield { type: 'text', text: ev.text }
+        else if (ev.type === 'reasoning_delta') yield { type: 'reasoning', text: ev.text }
         else if (ev.type === 'tool_call_start') yield { type: 'tool_call_start', id: ev.id, name: ev.name }
         else if (ev.type === 'tool_call_end') yield { type: 'tool_call_end', id: ev.id }
         else if (ev.type === 'message_end') {
@@ -120,7 +126,7 @@ export class MarcoAgent {
 
     const result = await runPromise
     const finalUsage = withCost(turnUsage(result.messages, history.length), this.model(), this.options.pricing)
-    yield { type: 'done', result: { text: extractFinalText(result.messages), messages: result.messages, usage: finalUsage } }
+    yield { type: 'done', result: buildAskResult(result.messages, history.length, finalUsage) }
   }
 
   private model(): string {
@@ -184,4 +190,26 @@ function extractFinalText(messages: Message[]): string {
     }
   }
   return ''
+}
+
+// Concatenates reasoning across all assistant messages in the current turn
+// (i.e. those after `historyLength`). Returns undefined if no reasoning was
+// emitted, so the AskResult.reasoning field is absent rather than empty.
+function extractTurnReasoning(messages: Message[], historyLength: number): string | undefined {
+  const parts: string[] = []
+  for (let i = historyLength; i < messages.length; i++) {
+    const msg = messages[i]
+    if (msg.role === 'assistant' && msg.reasoning) parts.push(msg.reasoning)
+  }
+  return parts.length > 0 ? parts.join('\n\n') : undefined
+}
+
+function buildAskResult(messages: Message[], historyLength: number, usage: CostUsage): AskResult {
+  const reasoning = extractTurnReasoning(messages, historyLength)
+  return {
+    text: extractFinalText(messages),
+    ...(reasoning !== undefined && { reasoning }),
+    messages,
+    usage,
+  }
 }

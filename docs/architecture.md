@@ -145,6 +145,8 @@ The complete library surface. If it's not in this list, it's not in v0.1.0:
 | `currentTimeTool` (one bundled generic tool) | ✅ |
 | `fromMcpServer()` — MCP-to-Tool bridge with `contextArgs` for multi-tenant scoping | ✅ |
 | Anthropic and Mock providers (re-exported from marco-harness) | ✅ |
+| `OpenAICompatibleProvider` for OpenRouter/Together/Groq/vLLM/etc. (re-exported) | ✅ |
+| Reasoning content surfaced as `reasoning` stream event + `AskResult.reasoning` | ✅ |
 | `marco-agent "<prompt>"` CLI bin (one-shot or `--stream`) | ✅ |
 
 Anything else — compaction, progressive tool disclosure, web search adapters, persistence helpers, plugin systems — is **not decided**. We add features when a real consumer needs them, not before.
