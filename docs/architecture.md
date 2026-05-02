@@ -174,7 +174,7 @@ What's shipped, what's next, and why each one is library-shaped rather than app-
 |---|---|---|
 | Streaming + multi-turn history | ✅ shipped | every web agent project would re-implement the SSE plumbing |
 | Usage tracking + budget guard | ✅ shipped | every project that bills LLM use needs this; one good impl beats N hand-rolled ones |
-| **MCP-server-to-Tool bridge** | next | eliminates per-endpoint wrapper code across all consumer apps |
+| **MCP-server-to-Tool bridge** | ✅ shipped | eliminates per-endpoint wrapper code across all consumer apps |
 | `toSSEResponse(stream)` helper | next | one-liner that ends the `ReadableStream` boilerplate in route handlers |
 | `HistoryStore` interface + in-memory default | next | gives apps a clear plug point for persistence; library default makes "just works" path trivial |
 | Confirmation hook helper | next | callback-based pattern; library shape, app provides UI |
