@@ -20,6 +20,11 @@ export type FromMcpServerOptions = {
   contextArgs?: Record<string, unknown>
   include?: string[]
   exclude?: string[]
+  // Extra params passed on the tools/list discovery call. Some multi-tenant
+  // servers require auth context (e.g. target_user_id) on discovery too,
+  // not just on tools/call. JSON-RPC params is server-specific anything
+  // beyond the optional `cursor`. Empty by default.
+  listParams?: Record<string, unknown>
   // Override fetch for testing or custom transports.
   fetch?: typeof globalThis.fetch
 }
@@ -79,7 +84,7 @@ export async function fromMcpServer(opts: FromMcpServerOptions): Promise<Tool[]>
   if (!fetchImpl) throw new Error('fromMcpServer: no fetch implementation available')
 
   const list = await jsonRpc<{ tools: McpToolDescriptor[] }>(
-    opts.url, 'tools/list', {}, opts.headers, fetchImpl,
+    opts.url, 'tools/list', opts.listParams ?? {}, opts.headers, fetchImpl,
   )
 
   let tools = list.tools ?? []
