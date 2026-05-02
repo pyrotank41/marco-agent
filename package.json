@@ -49,5 +49,13 @@
     "marco-harness"
   ],
   "author": "Karan Kochar <karankochar13@gmail.com> (https://karankochar.dev)",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pyrotank41/marco-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pyrotank41/marco-agent/issues"
+  },
+  "homepage": "https://github.com/pyrotank41/marco-agent#readme"
 }
