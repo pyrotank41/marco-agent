@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { MockProvider } from 'marco-harness'
 import type { Message, ChunkEvent } from 'marco-harness'
 import { MarcoAgent, type StreamEvent } from '../src/agent.js'
-import { shouldCompact, performCompaction } from '../src/compaction.js'
+import { shouldCompact, performCompaction, isCompactionSummary } from '../src/compaction.js'
 
 function assistantTurn(text: string, inputTokens = 1000, outputTokens = 50): ChunkEvent[] {
   return [
@@ -200,10 +200,12 @@ describe('MarcoAgent compaction integration', () => {
     expect(done.result.compacted).toBe(true)
   })
 
-  it('synthesized summary in result.messages carries meta.kind compaction with summaryUsage', async () => {
+  it('synthesized summary in result.messages is detectable via isCompactionSummary', async () => {
     // The whole point of meta: consumers can detect compaction in
     // result.messages without threading separate stream-event tracking
-    // through their persistence layer (e.g. crystallio's archive).
+    // through their persistence layer (e.g. crystallio's archive). The
+    // exported isCompactionSummary type guard narrows meta to
+    // CompactionSummaryMeta so consumers don't need to cast.
     const provider = new MockProvider([
       assistantTurn('SUMMARY', 4321, 87),  // distinctive token counts
       assistantTurn('next answer'),
@@ -216,20 +218,36 @@ describe('MarcoAgent compaction integration', () => {
     const result = await agent.ask('next prompt', makeHistory(10, 200_000))
     expect(result.compacted).toBe(true)
 
-    const summaryMsg = result.messages.find(
-      (m) => m.role === 'system' && m.meta?.kind === 'compaction',
-    )
+    const summaryMsg = result.messages.find(isCompactionSummary)
     expect(summaryMsg).toBeDefined()
-    if (summaryMsg && summaryMsg.role === 'system') {
+    if (summaryMsg) {
+      // After narrowing via isCompactionSummary, meta is typed as
+      // CompactionSummaryMeta — no `as` casts needed.
       expect(summaryMsg.text).toContain('SUMMARY')
-      expect(summaryMsg.meta).toEqual({
-        kind: 'compaction',
-        messagesRemoved: 14,
-        // Both input + output tokens of the summary LLM call — needed for
-        // cost attribution; output alone is insufficient.
-        summaryUsage: { inputTokens: 4321, outputTokens: 87 },
-      })
+      expect(summaryMsg.meta.kind).toBe('compaction')
+      expect(summaryMsg.meta.messagesRemoved).toBe(14)
+      // Both input + output tokens of the summary LLM call — needed for
+      // cost attribution; output alone is insufficient.
+      expect(summaryMsg.meta.summaryUsage).toEqual({ inputTokens: 4321, outputTokens: 87 })
     }
+  })
+
+  it('isCompactionSummary returns false for plain system / user / assistant / tool messages', () => {
+    const plainSys: Message = { role: 'system', text: 'plain' }
+    const sysWithUnrelatedMeta: Message = { role: 'system', text: 'plain', meta: { foo: 'bar' } }
+    const sysWithDifferentKind: Message = { role: 'system', text: 'plain', meta: { kind: 'redaction' } }
+    const user: Message = { role: 'user', text: 'plain' }
+    const userWithCompactionMeta: Message = {
+      // Even if a user message somehow had compaction-shaped meta, the guard
+      // requires role==='system' since compaction summaries are always system.
+      role: 'user', text: 'plain',
+      meta: { kind: 'compaction', messagesRemoved: 1, summaryUsage: { inputTokens: 1, outputTokens: 1 } },
+    }
+    expect(isCompactionSummary(plainSys)).toBe(false)
+    expect(isCompactionSummary(sysWithUnrelatedMeta)).toBe(false)
+    expect(isCompactionSummary(sysWithDifferentKind)).toBe(false)
+    expect(isCompactionSummary(user)).toBe(false)
+    expect(isCompactionSummary(userWithCompactionMeta)).toBe(false)
   })
 
   it('does not emit compaction events or set compacted when not triggered', async () => {

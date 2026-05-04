@@ -15,7 +15,37 @@
 // default — the library can't know what model your API key supports, and a
 // generic prompt would mismatch most agent domains.
 
-import type { Message, ModelProvider } from 'marco-harness'
+import type { Message, ModelProvider, SystemMessage, Usage } from 'marco-harness'
+
+// Convention shape that marco-agent stamps onto the synthesized summary's
+// `meta` field. Harness has no idea about this — it just allows arbitrary
+// MessageMeta. Consumers who care about compaction can import this type plus
+// the isCompactionSummary type guard below to narrow safely.
+export type CompactionSummaryMeta = {
+  kind: 'compaction'
+  // Number of original messages collapsed into this summary.
+  messagesRemoved: number
+  // Tokens spent on the summary LLM call. inputTokens covers the prefix
+  // that was summarized; outputTokens covers the summary text itself. Both
+  // matter for cost attribution — neither is derivable from the other.
+  summaryUsage: Usage
+}
+
+// Type guard for consumers walking result.messages. Use this to find the
+// synthesized summary message and narrow its `meta` to CompactionSummaryMeta:
+//
+//   const summary = result.messages.find(isCompactionSummary)
+//   if (summary) console.log(summary.meta.messagesRemoved)
+//
+// More robust than `m.role === 'system' && m.meta?.kind === 'compaction'`
+// at the call site because it returns a properly narrowed type.
+export function isCompactionSummary(
+  m: Message,
+): m is SystemMessage & { meta: CompactionSummaryMeta } {
+  if (m.role !== 'system') return false
+  const meta = m.meta as { kind?: unknown } | undefined
+  return meta?.kind === 'compaction'
+}
 
 export type CompactionConfig = {
   // REQUIRED — model id to use for the summary call. No default.

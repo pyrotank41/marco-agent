@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest'
 import { OpenAICompatibleProvider } from 'marco-harness'
 import type { Message } from 'marco-harness'
 import { MarcoAgent } from '../src/agent.js'
+import { isCompactionSummary } from '../src/compaction.js'
 
 const HAS_OPENROUTER = !!process.env.OPENROUTER_API_KEY
 
@@ -70,13 +71,11 @@ describe.skipIf(!HAS_OPENROUTER)('e2e: compaction meta survives real LLM round-t
     // Assert the run actually compacted (not just bypassed for some reason).
     expect(result.compacted).toBe(true)
 
-    // The synthesized summary must be present in result.messages with full
-    // meta describing the compaction.
-    const summaryMsg = result.messages.find(
-      (m) => m.role === 'system' && m.meta?.kind === 'compaction',
-    )
+    // The synthesized summary must be present in result.messages.
+    // isCompactionSummary narrows .meta to CompactionSummaryMeta — no casts.
+    const summaryMsg = result.messages.find(isCompactionSummary)
     expect(summaryMsg).toBeDefined()
-    if (summaryMsg && summaryMsg.role === 'system' && summaryMsg.meta?.kind === 'compaction') {
+    if (summaryMsg) {
       // Real model produced non-empty summary text.
       expect(summaryMsg.text.length).toBeGreaterThan(20)
 
