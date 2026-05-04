@@ -1,5 +1,9 @@
 # marco-agent
 
+[![npm version](https://img.shields.io/npm/v/marco-agent?color=cb3837&label=marco-agent&logo=npm)](https://www.npmjs.com/package/marco-agent)
+[![npm downloads](https://img.shields.io/npm/dm/marco-agent?color=cb3837&logo=npm)](https://www.npmjs.com/package/marco-agent)
+[![license](https://img.shields.io/npm/l/marco-agent)](./LICENSE)
+
 A simple, extensible AI agent built on [marco-harness](https://github.com/pyrotank41/MARCO). Works in CLI, server-side Node, Next.js, and Edge runtimes — with Anthropic, OpenAI, OpenRouter, DeepSeek, Together, Groq, vLLM, LM Studio, or any OpenAI-compatible endpoint.
 
 `MarcoAgent` is a thin, composable wrapper around the harness. Sensible defaults out of the box, every knob exposed when you need it: streaming, multi-turn history, usage + cost tracking, per-turn budget guards, MCP-server-to-Tool bridge, opt-in compaction, and reasoning-content surfacing for chain-of-thought models.
