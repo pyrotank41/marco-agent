@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { MockProvider } from 'marco-harness'
 import type { Message, ChunkEvent } from 'marco-harness'
 import { MarcoAgent, type StreamEvent } from '../src/agent.js'
-import { shouldCompact, performCompaction } from '../src/compaction.js'
+import { shouldCompact, performCompaction, isCompactionSummary } from '../src/compaction.js'
 
 function assistantTurn(text: string, inputTokens = 1000, outputTokens = 50): ChunkEvent[] {
   return [
@@ -104,6 +104,13 @@ describe('performCompaction', () => {
     expect(result.history[0].role).toBe('system')
     if (result.history[0].role === 'system') {
       expect(result.history[0].text).toContain('SUMMARY OF EARLIER TURNS')
+      // The synthesized summary must carry meta so consumers can identify it
+      // in result.messages without separate stream-event tracking.
+      expect(result.history[0].meta).toEqual({
+        kind: 'compaction',
+        messagesRemoved: 14,
+        summaryUsage: { inputTokens: 5000, outputTokens: 100 },
+      })
     }
     // Last messages are the most recent 3 user/assistant pairs from the original
     expect(result.history[1]).toEqual({ role: 'user', text: 'user message 7' })
@@ -111,6 +118,29 @@ describe('performCompaction', () => {
     expect(result.usage).toEqual({ inputTokens: 5000, outputTokens: 100 })
     // 14 messages collapsed (everything before the 8th user message)
     expect(result.messagesRemoved).toBe(14)
+  })
+
+  it('omits meta on user-provided system messages so they stay distinguishable', async () => {
+    // performCompaction only runs against history; user-provided system
+    // prompts come in via MarcoAgent.systemPrompt, never through history.
+    // But we should verify that the meta field is never populated on
+    // anything BUT the synthesized summary — i.e. plain SystemMessage stays
+    // shaped { role, text } without meta.
+    const history = makeHistory(10, 200_000)
+    const provider = new MockProvider([assistantTurn('SUM', 1000, 50)])
+    const result = await performCompaction(provider, history, {
+      summaryModel: 'm',
+      summaryPrompt: 'p',
+      keepLastTurns: 3,
+    })
+
+    // Only one system message in result.history, and it's the synthesized one.
+    const systemMessages = result.history.filter((m) => m.role === 'system')
+    expect(systemMessages).toHaveLength(1)
+    if (systemMessages[0].role === 'system') {
+      expect(systemMessages[0].meta).toBeDefined()
+      expect(systemMessages[0].meta?.kind).toBe('compaction')
+    }
   })
 })
 
@@ -168,6 +198,56 @@ describe('MarcoAgent compaction integration', () => {
     const done = events.find((e) => e.type === 'done')!
     if (done.type !== 'done') throw new Error('expected done')
     expect(done.result.compacted).toBe(true)
+  })
+
+  it('synthesized summary in result.messages is detectable via isCompactionSummary', async () => {
+    // The whole point of meta: consumers can detect compaction in
+    // result.messages without threading separate stream-event tracking
+    // through their persistence layer (e.g. crystallio's archive). The
+    // exported isCompactionSummary type guard narrows meta to
+    // CompactionSummaryMeta so consumers don't need to cast.
+    const provider = new MockProvider([
+      assistantTurn('SUMMARY', 4321, 87),  // distinctive token counts
+      assistantTurn('next answer'),
+    ])
+    const agent = new MarcoAgent({
+      provider,
+      tools: [],
+      compaction: { summaryModel: 'haiku', summaryPrompt: 'Summarize.', triggerAtInputTokens: 100_000, keepLastTurns: 3 },
+    })
+    const result = await agent.ask('next prompt', makeHistory(10, 200_000))
+    expect(result.compacted).toBe(true)
+
+    const summaryMsg = result.messages.find(isCompactionSummary)
+    expect(summaryMsg).toBeDefined()
+    if (summaryMsg) {
+      // After narrowing via isCompactionSummary, meta is typed as
+      // CompactionSummaryMeta — no `as` casts needed.
+      expect(summaryMsg.text).toContain('SUMMARY')
+      expect(summaryMsg.meta.kind).toBe('compaction')
+      expect(summaryMsg.meta.messagesRemoved).toBe(14)
+      // Both input + output tokens of the summary LLM call — needed for
+      // cost attribution; output alone is insufficient.
+      expect(summaryMsg.meta.summaryUsage).toEqual({ inputTokens: 4321, outputTokens: 87 })
+    }
+  })
+
+  it('isCompactionSummary returns false for plain system / user / assistant / tool messages', () => {
+    const plainSys: Message = { role: 'system', text: 'plain' }
+    const sysWithUnrelatedMeta: Message = { role: 'system', text: 'plain', meta: { foo: 'bar' } }
+    const sysWithDifferentKind: Message = { role: 'system', text: 'plain', meta: { kind: 'redaction' } }
+    const user: Message = { role: 'user', text: 'plain' }
+    const userWithCompactionMeta: Message = {
+      // Even if a user message somehow had compaction-shaped meta, the guard
+      // requires role==='system' since compaction summaries are always system.
+      role: 'user', text: 'plain',
+      meta: { kind: 'compaction', messagesRemoved: 1, summaryUsage: { inputTokens: 1, outputTokens: 1 } },
+    }
+    expect(isCompactionSummary(plainSys)).toBe(false)
+    expect(isCompactionSummary(sysWithUnrelatedMeta)).toBe(false)
+    expect(isCompactionSummary(sysWithDifferentKind)).toBe(false)
+    expect(isCompactionSummary(user)).toBe(false)
+    expect(isCompactionSummary(userWithCompactionMeta)).toBe(false)
   })
 
   it('does not emit compaction events or set compacted when not triggered', async () => {
