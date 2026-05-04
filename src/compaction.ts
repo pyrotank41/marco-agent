@@ -139,7 +139,7 @@ export async function performCompaction(
     meta: {
       kind: 'compaction',
       messagesRemoved: prefix.length,
-      summaryTokens: outputTokens,
+      summaryUsage: { inputTokens, outputTokens },
     },
   }
 
