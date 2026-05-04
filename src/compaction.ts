@@ -129,12 +129,20 @@ export async function performCompaction(
     }
   }
 
+  const trimmedSummary = summaryText.trim()
+  // Mark the synthesized system message with meta so consumers can detect it
+  // in result.messages without threading separate stream-event tracking
+  // through their persistence layer. Available since marco-harness 0.2.2.
   const summaryMessage: Message = {
     role: 'system',
-    text: `Summary of earlier conversation:\n${summaryText.trim()}`,
+    text: `Summary of earlier conversation:\n${trimmedSummary}`,
+    meta: {
+      kind: 'compaction',
+      messagesRemoved: prefix.length,
+      summaryTokens: outputTokens,
+    },
   }
 
-  const trimmedSummary = summaryText.trim()
   return {
     history: [summaryMessage, ...recent],
     compacted: true,
