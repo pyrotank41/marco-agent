@@ -120,4 +120,55 @@ describe('fromMcpServer', () => {
     const result = await tools[0].handler({}, { runId: 'r1' })
     expect(JSON.parse(result)).toEqual({ foo: 'bar', n: 42 })
   })
+
+  it('forwards ctx.abortSignal to the underlying fetch on tools/call', async () => {
+    let seenSignal: AbortSignal | undefined
+    const fetch = (async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse((init?.body as string) ?? '{}') as RpcRequest
+      if (body.method === 'tools/call') seenSignal = init?.signal as AbortSignal | undefined
+      return new Response(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: body.id,
+          result: body.method === 'tools/list'
+            ? TOOLS_LIST
+            : { content: [{ type: 'text', text: 'ok' }] },
+        }),
+        { status: 200 },
+      )
+    }) as typeof globalThis.fetch
+
+    const tools = await fromMcpServer({ url: 'http://mcp', fetch })
+    const ctrl = new AbortController()
+    await tools[0].handler({}, { runId: 'r1', abortSignal: ctrl.signal })
+    expect(seenSignal).toBe(ctrl.signal)
+  })
+
+  it('aborts in-flight MCP fetch when signal fires', async () => {
+    // Simulate a slow MCP server: the fetch resolves only after a delay,
+    // unless the AbortSignal fires first.
+    const fetch = ((_url: unknown, init?: RequestInit) => {
+      return new Promise<Response>((resolve, reject) => {
+        const body = JSON.parse((init?.body as string) ?? '{}') as RpcRequest
+        if (body.method === 'tools/list') {
+          resolve(new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: TOOLS_LIST }), { status: 200 }))
+          return
+        }
+        const sig = init?.signal as AbortSignal | undefined
+        const timer = setTimeout(() => {
+          resolve(new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { content: [{ type: 'text', text: 'late' }] } }), { status: 200 }))
+        }, 200)
+        sig?.addEventListener('abort', () => {
+          clearTimeout(timer)
+          reject(new DOMException('aborted', 'AbortError'))
+        })
+      })
+    }) as typeof globalThis.fetch
+
+    const tools = await fromMcpServer({ url: 'http://mcp', fetch })
+    const ctrl = new AbortController()
+    const promise = tools[0].handler({}, { runId: 'r1', abortSignal: ctrl.signal })
+    setTimeout(() => ctrl.abort('user stop'), 20)
+    await expect(promise).rejects.toMatchObject({ name: 'AbortError' })
+  })
 })

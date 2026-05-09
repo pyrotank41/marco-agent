@@ -110,6 +110,7 @@ export async function performCompaction(
   provider: ModelProvider,
   history: Message[],
   config: CompactionConfig,
+  options: { signal?: AbortSignal } = {},
 ): Promise<CompactionResult> {
   const keep = config.keepLastTurns ?? DEFAULT_KEEP_LAST_TURNS
 
@@ -150,6 +151,7 @@ export async function performCompaction(
     [summaryUserMessage],
     [],
     { model: config.summaryModel, maxTokens: 4000 },
+    options.signal ? { signal: options.signal } : undefined,
   )) {
     if (ev.type === 'text_delta') summaryText += ev.text
     else if (ev.type === 'message_end') {

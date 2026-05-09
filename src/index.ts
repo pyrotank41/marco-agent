@@ -1,4 +1,4 @@
-export { MarcoAgent, BudgetExceededError, type MarcoAgentOptions, type AskResult, type StreamEvent, type BudgetConfig } from './agent.js'
+export { MarcoAgent, BudgetExceededError, AgentAbortedError, type MarcoAgentOptions, type RunOptions, type AskResult, type StreamEvent, type BudgetConfig } from './agent.js'
 export {
   type CompactionConfig,
   type CompactionResult,

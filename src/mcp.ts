@@ -56,11 +56,13 @@ async function jsonRpc<T>(
   params: unknown,
   headers: Record<string, string> | undefined,
   fetchImpl: typeof globalThis.fetch,
+  signal?: AbortSignal,
 ): Promise<T> {
   const res = await fetchImpl(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...(headers ?? {}) },
     body: JSON.stringify({ jsonrpc: '2.0', id: nextId++, method, params }),
+    signal,
   })
   if (!res.ok) throw new Error(`MCP HTTP ${res.status}: ${await res.text()}`)
   const json = (await res.json()) as JsonRpcResponse<T>
@@ -97,11 +99,13 @@ export async function fromMcpServer(opts: FromMcpServerOptions): Promise<Tool[]>
     inputJsonSchema: t.inputSchema ?? { type: 'object', properties: {} },
     // The MCP server is the source of truth for input validation. Pass through.
     validate: (input) => input,
-    handler: async (input) => {
+    handler: async (input, ctx) => {
       const modelArgs = (typeof input === 'object' && input !== null) ? input as Record<string, unknown> : {}
       const args = { ...modelArgs, ...(opts.contextArgs ?? {}) }
+      // Forward ctx.abortSignal so a stop click cancels the in-flight
+      // MCP HTTP call mid-fetch — not just orphans it. Bills stop.
       const result = await jsonRpc<McpToolResult>(
-        opts.url, 'tools/call', { name: t.name, arguments: args }, opts.headers, fetchImpl,
+        opts.url, 'tools/call', { name: t.name, arguments: args }, opts.headers, fetchImpl, ctx.abortSignal,
       )
       return resultToText(result)
     },
