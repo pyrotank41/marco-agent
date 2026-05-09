@@ -27,6 +27,19 @@ export type MarcoAgentOptions = {
   // Optional. Without it, no compaction happens. summaryModel and
   // summaryPrompt are required when compaction is configured.
   compaction?: CompactionConfig
+  /**
+   * External AbortSignal that cancels the run. When fired, the in-flight
+   * model call is aborted (mid-stream), tool calls are short-circuited,
+   * and ask()/stream() either throw AgentAbortedError (ask) or yield
+   * an 'aborted' event (stream). For an ergonomic alternative, call
+   * agent.abort(reason) — internally mirrors this signal.
+   */
+  signal?: AbortSignal
+}
+
+export type RunOptions = {
+  /** Per-call abort signal. Overrides MarcoAgentOptions.signal if both set. */
+  signal?: AbortSignal
 }
 
 export type AskResult = {
@@ -51,6 +64,7 @@ export type StreamEvent =
   | { type: 'compaction_start' }
   | { type: 'compaction_end'; messagesRemoved: number; summaryTokens: number; summaryText: string }
   | { type: 'done'; result: AskResult }
+  | { type: 'aborted'; result: AskResult; reason?: string }
 
 const DEFAULT_SYSTEM_PROMPT = `You are a helpful AI assistant built on the marco-harness framework.
 Be concise, accurate, and use your tools when they would give a more reliable answer than guessing.`
@@ -64,46 +78,95 @@ export class BudgetExceededError extends Error {
   }
 }
 
+/**
+ * Thrown by ask() when the run is cancelled (via agent.abort() or an
+ * AbortSignal). Carries the partial result so callers can persist what
+ * was completed before the cancellation.
+ */
+export class AgentAbortedError extends Error {
+  constructor(public readonly reason: string, public readonly partial: AskResult) {
+    super(`Agent run aborted: ${reason}`)
+    this.name = 'AgentAbortedError'
+  }
+}
+
 export class MarcoAgent {
   private readonly options: MarcoAgentOptions
   private readonly provider: ModelProvider
+  private currentRun: AbortController | null = null
 
   constructor(options: MarcoAgentOptions = {}) {
     this.provider = options.provider ?? new AnthropicProvider({ apiKey: options.apiKey })
     this.options = options
   }
 
-  async ask(prompt: string, history: Message[] = []): Promise<AskResult> {
+  /**
+   * Abort the in-flight ask()/stream() call, if any. No-op when nothing
+   * is running. The run unwinds at the next cancellation point: the
+   * model fetch is cancelled mid-stream (tokens stop being billed), any
+   * in-flight tool calls are short-circuited, and the run resolves with
+   * partial state. ask() then throws AgentAbortedError; stream() yields
+   * a final 'aborted' event.
+   */
+  abort(reason?: string): void {
+    this.currentRun?.abort(reason ?? 'manually aborted')
+  }
+
+  async ask(prompt: string, history: Message[] = [], options: RunOptions = {}): Promise<AskResult> {
+    const ctrl = this.makeRunController(options.signal)
+    this.currentRun = ctrl
+
     let workingHistory = history
     let compacted = false
     let compactionUsage = emptyUsage()
 
-    if (shouldCompact(history, prompt, this.options.compaction)) {
-      const c = await performCompaction(this.provider, history, this.options.compaction!)
-      workingHistory = c.history
-      compacted = c.compacted
-      compactionUsage = { ...emptyUsage(), inputTokens: c.usage.inputTokens, outputTokens: c.usage.outputTokens, modelCalls: 1 }
+    try {
+      if (shouldCompact(history, prompt, this.options.compaction)) {
+        const c = await performCompaction(this.provider, history, this.options.compaction!, { signal: ctrl.signal })
+        workingHistory = c.history
+        compacted = c.compacted
+        compactionUsage = { ...emptyUsage(), inputTokens: c.usage.inputTokens, outputTokens: c.usage.outputTokens, modelCalls: 1 }
+      }
+
+      const harness = this.buildHarness(workingHistory, this.provider, () => undefined)
+      const result = await harness.run({ kind: 'user_message', text: prompt }, { signal: ctrl.signal })
+      const turnTokens = turnUsage(result.messages, workingHistory.length)
+      const totalTokens = addUsage(compactionUsage, turnTokens)
+      const usage = withCost(totalTokens, this.model(), this.options.pricing)
+
+      const out = buildAskResult(result.messages, workingHistory.length, usage)
+      const finalResult: AskResult = compacted ? { ...out, compacted: true } : out
+
+      if (result.status === 'aborted') {
+        throw new AgentAbortedError(result.abortReason ?? 'aborted', finalResult)
+      }
+
+      this.assertWithinBudget(usage)
+      return finalResult
+    } finally {
+      this.currentRun = null
     }
-
-    const harness = this.buildHarness(workingHistory, this.provider, () => undefined)
-    const result = await harness.run({ kind: 'user_message', text: prompt })
-    const turnTokens = turnUsage(result.messages, workingHistory.length)
-    const totalTokens = addUsage(compactionUsage, turnTokens)
-    const usage = withCost(totalTokens, this.model(), this.options.pricing)
-    this.assertWithinBudget(usage)
-
-    const out = buildAskResult(result.messages, workingHistory.length, usage)
-    return compacted ? { ...out, compacted: true } : out
   }
 
-  async *stream(prompt: string, history: Message[] = []): AsyncGenerator<StreamEvent, void, unknown> {
+  async *stream(prompt: string, history: Message[] = [], options: RunOptions = {}): AsyncGenerator<StreamEvent, void, unknown> {
+    const ctrl = this.makeRunController(options.signal)
+    this.currentRun = ctrl
+
+    try {
+      yield* this.streamInternal(prompt, history, ctrl.signal)
+    } finally {
+      this.currentRun = null
+    }
+  }
+
+  private async *streamInternal(prompt: string, history: Message[], signal: AbortSignal): AsyncGenerator<StreamEvent, void, unknown> {
     let workingHistory = history
     let compacted = false
     let compactionUsage = emptyUsage()
 
     if (shouldCompact(history, prompt, this.options.compaction)) {
       yield { type: 'compaction_start' }
-      const c = await performCompaction(this.provider, history, this.options.compaction!)
+      const c = await performCompaction(this.provider, history, this.options.compaction!, { signal })
       workingHistory = c.history
       compacted = c.compacted
       compactionUsage = { ...emptyUsage(), inputTokens: c.usage.inputTokens, outputTokens: c.usage.outputTokens, modelCalls: 1 }
@@ -124,8 +187,8 @@ export class MarcoAgent {
 
     const innerProvider = this.provider
     const tee: ModelProvider = {
-      async *stream(messages, tools, config) {
-        for await (const event of innerProvider.stream(messages, tools, config)) {
+      async *stream(messages, tools, config, opts) {
+        for await (const event of innerProvider.stream(messages, tools, config, opts)) {
           queue.push(event)
           wake()
           yield event
@@ -135,7 +198,7 @@ export class MarcoAgent {
 
     const harness = this.buildHarness(workingHistory, tee, () => budgetTrip?.reason)
     const runPromise = harness
-      .run({ kind: 'user_message', text: prompt })
+      .run({ kind: 'user_message', text: prompt }, { signal })
       .finally(() => { done = true; wake() })
 
     while (!done || queue.length > 0) {
@@ -165,7 +228,31 @@ export class MarcoAgent {
     const totalTokens = addUsage(compactionUsage, turnTokens)
     const finalUsage = withCost(totalTokens, this.model(), this.options.pricing)
     const out = buildAskResult(result.messages, workingHistory.length, finalUsage)
-    yield { type: 'done', result: compacted ? { ...out, compacted: true } : out }
+    const finalResult: AskResult = compacted ? { ...out, compacted: true } : out
+    if (result.status === 'aborted') {
+      yield { type: 'aborted', result: finalResult, reason: result.abortReason }
+    } else {
+      yield { type: 'done', result: finalResult }
+    }
+  }
+
+  /**
+   * Build the per-run AbortController. Mirrors any external signal
+   * (per-call options.signal or constructor-time options.signal) into
+   * an internal controller, so agent.abort() can fire alongside the
+   * external signal.
+   */
+  private makeRunController(perCallSignal?: AbortSignal): AbortController {
+    const ctrl = new AbortController()
+    const external = perCallSignal ?? this.options.signal
+    if (external) {
+      if (external.aborted) {
+        ctrl.abort(external.reason)
+      } else {
+        external.addEventListener('abort', () => ctrl.abort(external.reason), { once: true })
+      }
+    }
+    return ctrl
   }
 
   private model(): string {
