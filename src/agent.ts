@@ -1,4 +1,4 @@
-import { Harness, AnthropicProvider, type Tool, type Hooks, type ModelProvider, type ModelConfig, type Message, type ChunkEvent, type AssistantMessage } from 'marco-harness'
+import { Harness, AnthropicProvider, type Tool, type Hooks, type ModelProvider, type ModelConfig, type Message, type ChunkEvent, type AssistantMessage, type UserMessageContentPart } from 'marco-harness'
 import { currentTimeTool } from './tools/current-time.js'
 import { type Usage, type CostUsage, type PricingFunction, emptyUsage, addUsage, fromHarnessUsage, turnUsage, withCost } from './usage.js'
 import { type CompactionConfig, shouldCompact, performCompaction } from './compaction.js'
@@ -41,6 +41,19 @@ export type RunOptions = {
   /** Per-call abort signal. Overrides MarcoAgentOptions.signal if both set. */
   signal?: AbortSignal
 }
+
+/**
+ * Prompt input to ask()/stream(). When string, the agent forwards
+ * the text-only path. When an array of content parts, the parts ride
+ * through marco-harness onto UserMessage.content for native multimodal
+ * rendering (images, PDFs) by capable providers.
+ *
+ * The text fallback for transcript/compaction purposes is computed by
+ * `promptToText` — joining any `text` parts with newlines and emitting
+ * a brief mention for non-text parts so logs and compaction summaries
+ * stay readable.
+ */
+export type AgentPrompt = string | UserMessageContentPart[]
 
 export type AskResult = {
   text: string
@@ -112,16 +125,18 @@ export class MarcoAgent {
     this.currentRun?.abort(reason ?? 'manually aborted')
   }
 
-  async ask(prompt: string, history: Message[] = [], options: RunOptions = {}): Promise<AskResult> {
+  async ask(prompt: AgentPrompt, history: Message[] = [], options: RunOptions = {}): Promise<AskResult> {
     const ctrl = this.makeRunController(options.signal)
     this.currentRun = ctrl
+
+    const { text: promptText, content: promptContent } = normalizePrompt(prompt)
 
     let workingHistory = history
     let compacted = false
     let compactionUsage = emptyUsage()
 
     try {
-      if (shouldCompact(history, prompt, this.options.compaction)) {
+      if (shouldCompact(history, promptText, this.options.compaction)) {
         const c = await performCompaction(this.provider, history, this.options.compaction!, { signal: ctrl.signal })
         workingHistory = c.history
         compacted = c.compacted
@@ -129,7 +144,14 @@ export class MarcoAgent {
       }
 
       const harness = this.buildHarness(workingHistory, this.provider, () => undefined)
-      const result = await harness.run({ kind: 'user_message', text: prompt }, { signal: ctrl.signal })
+      const result = await harness.run(
+        {
+          kind: 'user_message',
+          text: promptText,
+          ...(promptContent ? { content: promptContent } : {}),
+        },
+        { signal: ctrl.signal }
+      )
       const turnTokens = turnUsage(result.messages, workingHistory.length)
       const totalTokens = addUsage(compactionUsage, turnTokens)
       const usage = withCost(totalTokens, this.model(), this.options.pricing)
@@ -148,7 +170,7 @@ export class MarcoAgent {
     }
   }
 
-  async *stream(prompt: string, history: Message[] = [], options: RunOptions = {}): AsyncGenerator<StreamEvent, void, unknown> {
+  async *stream(prompt: AgentPrompt, history: Message[] = [], options: RunOptions = {}): AsyncGenerator<StreamEvent, void, unknown> {
     const ctrl = this.makeRunController(options.signal)
     this.currentRun = ctrl
 
@@ -159,12 +181,13 @@ export class MarcoAgent {
     }
   }
 
-  private async *streamInternal(prompt: string, history: Message[], signal: AbortSignal): AsyncGenerator<StreamEvent, void, unknown> {
+  private async *streamInternal(prompt: AgentPrompt, history: Message[], signal: AbortSignal): AsyncGenerator<StreamEvent, void, unknown> {
+    const { text: promptText, content: promptContent } = normalizePrompt(prompt)
     let workingHistory = history
     let compacted = false
     let compactionUsage = emptyUsage()
 
-    if (shouldCompact(history, prompt, this.options.compaction)) {
+    if (shouldCompact(history, promptText, this.options.compaction)) {
       yield { type: 'compaction_start' }
       const c = await performCompaction(this.provider, history, this.options.compaction!, { signal })
       workingHistory = c.history
@@ -198,7 +221,14 @@ export class MarcoAgent {
 
     const harness = this.buildHarness(workingHistory, tee, () => budgetTrip?.reason)
     const runPromise = harness
-      .run({ kind: 'user_message', text: prompt }, { signal })
+      .run(
+        {
+          kind: 'user_message',
+          text: promptText,
+          ...(promptContent ? { content: promptContent } : {}),
+        },
+        { signal }
+      )
       .finally(() => { done = true; wake() })
 
     while (!done || queue.length > 0) {
@@ -337,5 +367,39 @@ function buildAskResult(messages: Message[], historyLength: number, usage: CostU
     ...(reasoning !== undefined && { reasoning }),
     messages,
     usage,
+  }
+}
+
+/**
+ * Normalize the public prompt input into the (text, content) pair the
+ * inner pipeline needs. Compaction's char-count estimator and persisted
+ * transcripts both want a textual fallback, so we synthesize one from
+ * non-text parts (e.g. "[Image]") when the caller passed a content-only
+ * payload.
+ *
+ * Returns content unchanged for `UserMessageContentPart[]` input — the
+ * harness's providers do the provider-specific translation.
+ */
+export function normalizePrompt(
+  prompt: AgentPrompt
+): { text: string; content?: UserMessageContentPart[] } {
+  if (typeof prompt === 'string') {
+    return { text: prompt }
+  }
+  const textParts: string[] = []
+  for (const p of prompt) {
+    if (p.type === 'text') textParts.push(p.text)
+    else if (p.type === 'image') textParts.push('[Image]')
+    else if (p.type === 'document') {
+      const name =
+        'filename' in p.source && p.source.filename
+          ? p.source.filename
+          : 'document'
+      textParts.push(`[Document: ${name}]`)
+    }
+  }
+  return {
+    text: textParts.join('\n'),
+    content: prompt,
   }
 }
